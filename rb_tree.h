@@ -5,6 +5,7 @@
 #include <memory>
 #include "tree_utils.h"
 
+//invariant debug
 namespace BBST
 {
 
@@ -31,47 +32,50 @@ namespace BBST
                 return 0;
         }
 
-        if (rb_subtree_invariant(ptr->left) + ptr->is_black_ != ptr->black_height_)
+        auto left_height = rb_subtree_invariant(ptr->left);
+        if (left_height == 0)
             return 0;
 
-        if (rb_subtree_invariant(ptr->right) + ptr->is_black_ != ptr->black_height_)
+        if (rb_subtree_invariant(ptr->right) != left_height)
             return 0;
 
-        return ptr->black_height_;
+        return left_height + ptr->is_black_;
     }
 
     template<class rb_tree_node_ptr_t>
-    bool rb_tree_invariant(rb_tree_node_ptr_t root)
+    uint32_t rb_tree_invariant(rb_tree_node_ptr_t root)
     {
         if (root == nullptr)
-            return true;
-
-        if (root->parent != nullptr || !root->is_black_ || !tree_is_left_child(root))
-            return false;
-
-        return rb_subtree_invariant(root) != 0;
+            return 1;
+        if (!root->is_black_)
+            return 0;
+        return rb_subtree_invariant(root);
     }
 
-    template<class key_t, class mapped_t, class metadata_t>
-    struct exposure
+    template<class rb_tree_header_t>
+    bool rb_tree_header_invariant(rb_tree_header_t header)
     {
-        const key_t key;
-        metadata_t metadata;
-        mapped_t mapped;
+        auto black_height = rb_tree_invariant(header.root_);
+        if (black_height == 0)
+            return false;
+        if (black_height != header.black_height_)
+            return false;
+        if (header.root_ != nullptr)
+        {
+            if (tree_min(header.root_) != header.begin_)
+                return false;
+        }
+        else
+        {
+            if (header.begin_ != nullptr)
+                return false;
+        }
+        return true;
+    }
+}
 
-        typedef const key_t key_type;
-        typedef mapped_t mapped_type;
-        typedef metadata_t metadata_type;
-
-        exposure(key_t key_ = key_t(), metadata_t metadata_ = metadata_t(), mapped_t mapped_ = mapped_t())
-                :
-                key(std::move(key_))
-                , metadata(std::move(metadata_))
-                , mapped(std::move(mapped_))
-        {}
-    };
-
-    //TODO: https://stackoverflow.com/questions/31623423/why-does-libcs-implementation-of-map-use-this-union
+namespace BBST
+{
     template<class exposure_t>
     struct rb_tree_node : public base_tree_node<rb_tree_node<exposure_t>>
     {
@@ -80,15 +84,13 @@ namespace BBST
         typedef typename tree_node_base_traits<rb_tree_node>::value_type value_type;
         typedef typename tree_node_base_traits<rb_tree_node>::key_type key_type;
         typedef typename tree_node_base_traits<rb_tree_node>::metadata_type metadata_type;
-        bool is_black_;
-        uint32_t black_height_;
+        bool is_black_: 1;
         value_type value_;
 
         template<class... Args>
-        rb_tree_node(Args... args)
+        explicit rb_tree_node(Args... args)
                 :
                 is_black_(false)
-                , black_height_(1)
                 , value_(std::forward<Args>(args)...)
         {}
 
@@ -110,12 +112,17 @@ namespace BBST
 
         inline key_type &key() const noexcept
         {
-            return value().key;
+            return value_.key;
         }
 
         inline metadata_type &metadata() noexcept
         {
-            return value().metadata;
+            return value_.metadata;
+        }
+
+        inline const metadata_type &metadata() const noexcept
+        {
+            return value_.metadata;
         }
     };
 
@@ -129,28 +136,378 @@ namespace BBST
         typedef typename exposure_t::metadata_type metadata_type;
     };
 
-    template<class Key, class Mapped, class Metadata, class MetadataUpdator, class Compare = std::less<Key>>
-    requires (std::predicate<const Compare &, const Key &, const Key &> &&
-              std::regular_invocable<const MetadataUpdator &, rb_tree_node<BBST::exposure<Key, Mapped, Metadata>> *>)
-    class RedBlackTree
+    //header is non-owning type, mainly used as a bookkeeping struct for join-split operator
+    template<class Key, class Mapped, class Metadata>
+    struct rb_tree_header
     {
     private:
         typedef rb_tree_node<BBST::exposure<Key, Mapped, Metadata>> rb_tree_node_t;
+        typedef rb_tree_node_t *rb_tree_node_ptr_t;
+        typedef base_tree_node<rb_tree_node_t> base_tree_node_t;
+        typedef rb_tree_header<Key, Mapped, Metadata> rb_tree_header_t;
+
+    public:
+        typedef tree_forward_iterator_<base_tree_node_t> iterator;
+        typedef tree_forward_const_iterator_<base_tree_node_t> const_iterator;
+
+        rb_tree_node_ptr_t root_;
+        rb_tree_node_ptr_t begin_;
+        uint32_t black_height_;
+
+        rb_tree_header(rb_tree_node_ptr_t root, rb_tree_node_ptr_t begin, uint32_t black_height)
+                :
+                root_(root)
+                , begin_(begin)
+                , black_height_(black_height)
+        {}
+
+        inline iterator begin() noexcept
+        {
+            return iterator(begin_);
+        }
+
+        inline const_iterator begin() const noexcept
+        {
+            return const_iterator(begin_);
+        };
+
+        inline iterator end() noexcept
+        {
+            return iterator(root_->parent);
+        }
+
+        inline const_iterator end() const noexcept
+        {
+            return const_iterator(root_->parent);
+        }
+    };
+
+    /*
+     * Pre-condition: ptr must be red. root is either ptr or black
+     *                root is ptr's ancestor
+     *                red black subtree at ptr's invariant must be valid
+     *                the only possible violation of subtree at root is two consecutive red at ptr
+     * Post-condition: rb_subtree_invariant(root) != 0
+     * This function is unaware of the existence of root->parent, and might return the new "rotated" root
+     * It's the caller's responsibility to link the old root->parent to this possibly new root
+     */
+    template<class rb_tree_node_ptr_t, class metadata_updator_t>
+    rb_tree_node_ptr_t rb_tree_insert_fixup(rb_tree_node_ptr_t ptr, rb_tree_node_ptr_t root
+                                            , const metadata_updator_t &updator_) noexcept(std::is_nothrow_invocable_v<const metadata_updator_t &, rb_tree_node_ptr_t>)
+    {
+        ASSERT(!ptr->is_black_ &&
+               (ptr == root || (rb_subtree_invariant(ptr->parent->left) == rb_subtree_invariant(ptr->parent->right) && root->is_black_)),
+               "precondition failed");
+        while (ptr != root && !ptr->parent_unsafe()->is_black_)
+        {
+            //ptr->parent is not root
+            if (tree_is_left_child(ptr->parent))
+            {
+                rb_tree_node_ptr_t ptrUncle = ptr->parent->parent->right;
+                /*
+                 *     G(B)                 G(R) <- next C
+                 *    /    \               /    \
+                 *   P(R)   U(R)   ->     P(B)   U(B)
+                 *  /                    /
+                 * C(R)                 C(R)
+                 */
+                if (ptrUncle != nullptr && !ptrUncle->is_black_)
+                {
+                    ptr = ptr->parent_unsafe();
+                    ptr->is_black_ = true;
+                    updator_(ptr);
+                    ptr = ptr->parent_unsafe();
+                    ptr->is_black_ = false;
+                    ptrUncle->is_black_ = true;
+                    updator_(ptr);
+                }
+                else
+                {
+                    /*
+                     *     G(B)                 G(B)
+                     *    /    \               /    \
+                     *   P(R)   U(R)   ->     C(R)   U(R)
+                     *    \                  /
+                     *     C(R)             P(R) <- after rotate ptr point here
+                     */
+                    if (!tree_is_left_child(ptr))
+                    {
+                        ptr = ptr->parent_unsafe();
+                        unguarded_tree_left_rotate(ptr);
+                        updator_(ptr);
+                    }
+                    /*
+                     *      G(B)                  G(R)                  P(B)
+                     *     /    \                /    \                /    \
+                     *    P(R)   U(B)   ->      P(B)   U(B)     ->    C(R)   G(R)  <- ptr points here (end loop)
+                     *   /                     /                              \
+                     *  C(R)                  C(R)                             U(B)
+                     */
+                    ptr = ptr->parent_unsafe();
+                    ptr->is_black_ = true;
+                    updator_(ptr);
+                    ptr = ptr->parent_unsafe();
+                    ptr->is_black_ = false;
+                    bool is_finish = ptr == root;
+                    if (is_finish)
+                    {
+                        tree_root_right_rotate(ptr);
+                    }
+                    else
+                    {
+                        unguarded_tree_right_rotate(ptr);
+                    }
+                    updator_(ptr);
+                    ptr = ptr->parent_unsafe();
+                    updator_(ptr);
+                    if (is_finish)
+                    {
+                        ASSERT(rb_tree_invariant(ptr), "post condition false");
+                        return ptr;
+                    }
+                    break;
+                }
+            }
+            else
+            {
+                rb_tree_node_ptr_t ptrUncle = ptr->parent->parent->left;
+                /*
+                 *     G(B)                 G(R) <- next C
+                 *    /    \               /    \
+                 *   U(R)   P(R)   ->     U(B)   P(B)
+                 *           \                    \
+                 *            C(R)                 C(R)
+                 */
+                if (ptrUncle != nullptr && !ptrUncle->is_black_)
+                {
+                    ptr = ptr->parent_unsafe();
+                    ptr->is_black_ = true;
+                    updator_(ptr);
+                    ptr = ptr->parent_unsafe();
+                    ptr->is_black_ = false;
+                    ptrUncle->is_black_ = true;
+                    updator_(ptr);
+                }
+                else
+                {
+                    /*
+                     *     G(B)                 G(B)
+                     *    /    \               /    \
+                     *   U(B)   P(R)   ->     U(B)   C(R)
+                     *         /                      \
+                     *        C(R)                     P(R) <- after rotate ptr point here
+                     */
+                    if (tree_is_left_child(ptr))
+                    {
+                        ptr = ptr->parent_unsafe();
+                        unguarded_tree_right_rotate(ptr);
+                        updator_(ptr);
+                    }
+                    /*
+                     *      G(B)                  G(R)                                               P(B)
+                     *     /    \                /    \                                             /    \
+                     *    U(B)   P(R)   ->      U(R)   P(B)     ->    ptr points here(end loop) -> G(R)   C(R)
+                     *            \                     \                                         /
+                     *             C(R)                  C(R)                                    U(B)
+                     */
+                    ptr = ptr->parent_unsafe();
+                    ptr->is_black_ = true;
+                    updator_(ptr);
+                    ptr = ptr->parent_unsafe();
+                    ptr->is_black_ = false;
+                    bool is_finish = ptr == root;
+                    if (is_finish)
+                    {
+                        tree_root_left_rotate(ptr);
+                    }
+                    else
+                    {
+                        unguarded_tree_left_rotate(ptr);
+                    }
+                    updator_(ptr);
+                    ptr = ptr->parent_unsafe();
+                    updator_(ptr);
+                    if (is_finish)
+                    {
+                        ASSERT(rb_tree_invariant(ptr), "post condition failed");
+                        return ptr;
+                    }
+                    break;
+                }
+            }
+        }
+        while (ptr != root)
+        {
+            ptr = ptr->parent_unsafe();
+            updator_(ptr);
+        }
+        ASSERT(rb_subtree_invariant(ptr), "post condition failed");
+        return ptr;
+    }
+
+    template<class rb_tree_header_t, class rb_tree_node_ptr_t, class metadata_updator_t, class comparator_t>
+    rb_tree_header_t rb_tree_join_x(rb_tree_header_t left, rb_tree_node_ptr_t x, rb_tree_header_t right, const metadata_updator_t &metadata_updator
+                                    , const comparator_t &comparator) noexcept(std::is_nothrow_invocable_v<const metadata_updator_t &, rb_tree_node_ptr_t>)
+    {
+        ASSERT(rb_tree_header_invariant(left), "left header invariant false");
+        ASSERT(left.root_ == nullptr || comparator(BBST::tree_max(left.root_)->key(), x->key()), "left tree must be less than x");
+        ASSERT(rb_tree_header_invariant(right), "right header invariant false");
+        ASSERT(right.root_ == nullptr || comparator(x->key(), BBST::tree_min(right.root_)->key()), "right tree must be greater than x");
+        if (left.black_height_ == right.black_height_)
+        {
+            if (left.root_)
+            {
+                x->left = left.root_;
+                left.root_->parent = x;
+            }
+            else
+            {
+                left.begin_ = x;
+            }
+            if (right.root_)
+            {
+                x->right = right.root_;
+                right.root_->parent = x;
+            }
+            x->is_black_ = true;
+            left.root_ = x;
+            left.black_height_++;
+            ASSERT(rb_tree_header_invariant(left), "post condition failed");
+            return left;
+        }
+        else if (left.black_height_ < right.black_height_)
+        {
+            rb_tree_node_ptr_t ptr = right.root_;
+            uint32_t diff = right.black_height_ - left.black_height_;
+            while (true)
+            {
+                if ((ptr->left == nullptr || ptr->left->is_black_) && --diff == 0)
+                    break;
+                ptr = ptr->left;
+            }
+            x->is_black_ = false;
+
+            x->left = left.root_;
+            x->right = ptr->left;
+            if (x->left)
+                x->left->parent = x;
+            if (x->right)
+                x->right->parent = x;
+
+            ptr->left = x;
+            x->parent = ptr;
+            right.root_ = rb_tree_insert_fixup(x, right.root_);
+            if (!right.root_->is_black_)
+            {
+                right.root_->is_black_ = true;
+                right.black_height_++;
+            }
+            right.begin_ = left.root_ == nullptr ? x : left.begin_;
+            ASSERT(rb_tree_header_invariant(right), "post condition failed");
+            return right;
+        }
+        else
+        {
+            rb_tree_node_ptr_t ptr = left.root_;
+            uint32_t diff = left.black_height_ - right.black_height_;
+            while (true)
+            {
+                if ((ptr->right == nullptr || ptr->right->is_black_) && --diff == 0)
+                    break;
+                ptr = ptr->right;
+            }
+            x->is_black_ = false;
+            x->right = right.root_;
+            x->left = ptr->right;
+            if (x->right)
+                x->right->parent = x;
+            if (x->left)
+                x->left->parent = x;
+            ptr->right = x;
+            x->parent = ptr;
+            left.root_ = rb_tree_insert_fixup(x, left.root_);
+            if (!left.root_->is_black_)
+            {
+                left.root_->is_black_ = true;
+                left.black_height_++;
+            }
+            ASSERT(rb_tree_header_invariant(left), "post condition failed");
+            return left;
+        }
+    }
+
+
+    template<class key_t, class mapped_t, class metadata_t, class metadata_updator_t, class comparator_t = std::less<key_t>>
+    requires (std::predicate<const comparator_t &, const key_t &, const key_t &> &&
+              std::regular_invocable<const metadata_updator_t &, rb_tree_node<BBST::exposure<key_t, mapped_t, metadata_t>> *>)
+    class rb_tree
+    {
+    private:
+        typedef rb_tree_node<exposure<key_t, mapped_t, metadata_t>> rb_tree_node_t;
         typedef base_tree_node<rb_tree_node_t> base_tree_node_t;
         typedef base_tree_node_t *base_tree_node_ptr_t;
         typedef rb_tree_node_t *rb_tree_node_ptr_t;
+        typedef rb_tree_header<key_t, mapped_t, metadata_t> rb_tree_header_t;
         typedef typename rb_tree_node_t::value_type value_type;
     public:
-        typedef iterator_<base_tree_node_t> iterator;
-        typedef const_iterator_<base_tree_node_t> const_iterator;
-
+        typedef tree_bidirectional_iterator_<base_tree_node_t> iterator;
+        typedef tree_bidirectional_const_iterator_<base_tree_node_t> const_iterator;
     private:
 
-        base_tree_node_t end_node;
-        base_tree_node_ptr_t begin_node;
-        uint32_t size;
-        Compare comp;
-        MetadataUpdator updator;
+        base_tree_node_t end_node_;
+        base_tree_node_ptr_t begin_node_;
+        comparator_t comp_;
+        metadata_updator_t updator_;
+        uint32_t black_height_;
+
+        std::pair<rb_tree_node_ptr_t &, base_tree_node_ptr_t> inline find_equal_or_insert_pos(const key_t &key)
+        {
+            return BBST::find_equal_or_insert_pos<key_t, base_tree_node_ptr_t, rb_tree_node_ptr_t, comparator_t>(key, &end_node_, comp_);
+        }
+
+        void insert_node_at(base_tree_node_ptr_t parent, rb_tree_node_ptr_t &child, rb_tree_node_ptr_t new_node) noexcept
+        {
+            new_node->left = nullptr;
+            new_node->right = nullptr;
+            new_node->parent = parent;
+            child = new_node;
+            if (begin_node_->left != nullptr)
+                begin_node_ = begin_node_->left;
+            rb_tree_node_ptr_t root = (end_node_.left = rb_tree_insert_fixup(new_node, end_node_.left, updator_));
+            if (!root->is_black_)
+            {
+                root->is_black_ = true;
+                black_height_++;
+            }
+        }
+
+        template<class... Args>
+        std::pair<iterator, bool> emplace_key_args(key_t key, Args... args)
+        {
+
+            auto [child, parent] = find_equal_or_insert_pos(key);
+            if (child == nullptr)
+            {
+                rb_tree_node_ptr_t new_node = construct_node(std::forward<key_t>(key), std::forward<Args>(args)...);
+                insert_node_at(parent, child, new_node);
+                return {iterator(new_node), true};
+            }
+            return {iterator(child), false};
+        }
+
+        template<class... Args>
+        std::pair<iterator, bool> emplace_args(Args...args)
+        {
+            std::unique_ptr<rb_tree_node_t> new_node = std::make_unique<>(std::forward<Args>(args)...);
+            auto [child, parent] = find_equal_or_insert_pos(new_node->value_.key);
+            if (child == nullptr)
+            {
+                insert_node_at(parent, child, new_node.release());
+                return {new_node, true};
+            }
+
+            return {*child, false};
+        }
 
         //TODO: templatize with allocator https://stackoverflow.com/questions/65262899/what-is-the-purpose-of-pointer-rebind
         template<class... Args>
@@ -165,332 +522,96 @@ namespace BBST
             delete static_cast<rb_tree_node_ptr_t>(p.get());
         }
 
-        /*
-         * sub_tree invariant: all condition is satisfied, except root might be red
-         * Pre-condition: ptr == root or root is ancestor of ptr
-         * Let ptr_height = rb_subtree_invariant(ptr), then
-         *          ptr_height != 0 and (ptr == root || (ptr_height + ptr->parent->is_black_ = ptr->parent->black_height_)
-         *
-         * Post-condition: rb_subtree_invariant(root) != 0
-         * This function is unaware of the existence of root->parent, and might return the new "rotated" root
-         * It's the caller's responsibility to rewire the old root-parent to this possibly new root
-         */
-//        rb_tree_node_ptr_t rebalance_after_insert(rb_tree_node_ptr_t ptr
-//                                                  , rb_tree_node_ptr_t root) noexcept(std::is_nothrow_invocable_v<const MetadataUpdator &, rb_tree_node<BBST::exposure<Key, Mapped, Metadata>> *>)
-//        {
-//
-//        }
-
-        void rebalance_after_insert(rb_tree_node_ptr_t ptr, rb_tree_node_ptr_t root) noexcept
-        {
-            ASSERT(rb_subtree_invariant(ptr), "first precondition failed");
-            ASSERT(ptr == root ||
-                   (rb_subtree_invariant(ptr) + ptr->parent_unsafe()->is_black_ == ptr->parent_unsafe()->black_height_),
-                   "second precondition failed");
-            while (ptr != root && !ptr->parent_unsafe()->is_black_)
-            {
-                //ptr->parent is not root
-                if (tree_is_left_child(ptr->parent))
-                {
-                    rb_tree_node_ptr_t ptrUncle = ptr->parent->parent->right;
-                    /*
-                     *     G(B)                 G(R) <- next C
-                     *    /    \               /    \
-                     *   P(R)   U(R)   ->     P(B)   U(B)
-                     *  /                    /
-                     * C(R)                 C(R)
-                     */
-                    if (ptrUncle != nullptr && !ptrUncle->is_black_)
-                    {
-                        ptr = ptr->parent_unsafe();
-                        ptr->is_black_ = true;
-                        ptr->black_height_++;
-                        updator(ptr);
-                        ptr = ptr->parent_unsafe();
-                        ptr->is_black_ = false;
-                        ptrUncle->is_black_ = true;
-                        ptrUncle->black_height_++;
-                        updator(ptr);
-                    }
-                    else
-                    {
-                        /*
-                         *     G(B)                 G(B)
-                         *    /    \               /    \
-                         *   P(R)   U(R)   ->     C(R)   U(R)
-                         *    \                  /
-                         *     C(R)             P(R) <- after rotate ptr point here
-                         */
-                        if (!tree_is_left_child(ptr))
-                        {
-                            ptr = ptr->parent_unsafe();
-                            unguarded_tree_left_rotate(ptr);
-                            updator(ptr);
-                        }
-                        /*
-                         *      G(B)                  G(R)                  P(B)
-                         *     /    \                /    \                /    \
-                         *    P(R)   U(B)   ->      P(B)   U(B)     ->    C(R)   G(R)  <- ptr points here (end loop)
-                         *   /                     /                              \
-                         *  C(R)                  C(R)                             U(B)
-                         */
-                        ptr = ptr->parent_unsafe();
-                        ptr->is_black_ = true;
-                        ptr->black_height_++;
-                        updator(ptr);
-                        ptr = ptr->parent_unsafe();
-                        ptr->is_black_ = false;
-                        ptr->black_height_--;
-                        tree_right_rotate(ptr);
-                        updator(ptr->right);
-                        updator(ptr);
-                        break;
-                    }
-                }
-                else
-                {
-                    rb_tree_node_ptr_t ptrUncle = ptr->parent->parent->left;
-                    /*
-                     *     G(B)                 G(R) <- next C
-                     *    /    \               /    \
-                     *   U(R)   P(R)   ->     U(B)   P(B)
-                     *           \                    \
-                     *            C(R)                 C(R)
-                     */
-                    if (ptrUncle != nullptr && !ptrUncle->is_black_)
-                    {
-                        ptr = ptr->parent_unsafe();
-                        ptr->is_black_ = true;
-                        ptr->black_height_++;
-                        updator(ptr);
-                        ptr = ptr->parent_unsafe();
-                        ptr->is_black_ = false;
-                        ptrUncle->is_black_ = true;
-                        ptrUncle->black_height_++;
-                        updator(ptr);
-                    }
-                    else
-                    {
-                        /*
-                         *     G(B)                 G(B)
-                         *    /    \               /    \
-                         *   U(B)   P(R)   ->     U(B)   C(R)
-                         *         /                      \
-                         *        C(R)                     P(R) <- after rotate ptr point here
-                         */
-                        if (tree_is_left_child(ptr))
-                        {
-                            ptr = ptr->parent_unsafe();
-                            tree_right_rotate(ptr);
-                            updator(ptr);
-                        }
-                        /*
-                         *      G(B)                  G(R)                                               P(B)
-                         *     /    \                /    \                                             /    \
-                         *    U(B)   P(R)   ->      U(R)   P(B)     ->    ptr points here(end loop) -> G(R)   C(R)
-                         *            \                     \                                         /
-                         *             C(R)                  C(R)                                    U(B)
-                         */
-                        ptr = ptr->parent_unsafe();
-                        ptr->is_black_ = true;
-                        ptr->black_height_++;
-                        updator(ptr);
-                        ptr = ptr->parent_unsafe();
-                        ptr->is_black_ = false;
-                        ptr->black_height_--;
-                        unguarded_tree_left_rotate(ptr);
-                        updator(ptr->right);
-                        updator(ptr);
-                        break;
-                    }
-                }
-            }
-            while (true)
-            {
-                if (ptr == root) break;
-                ptr = ptr->parent_unsafe();
-                updator(ptr);
-            }
-            ASSERT(rb_subtree_invariant(ptr), "post-condition failed");
-        }
-
-        void
-        insert_node_at(base_tree_node_ptr_t parent, rb_tree_node_ptr_t &child, rb_tree_node_ptr_t new_node) noexcept
-        {
-            new_node->left = nullptr;
-            new_node->right = nullptr;
-            new_node->parent = parent;
-            child = new_node;
-            if (begin_node->left != nullptr)
-                begin_node = begin_node->left;
-            rebalance_after_insert(new_node, end_node.left);
-            rb_tree_node_ptr_t root = end_node.left;
-            if (!root->is_black_)
-            {
-                root->is_black_ = true;
-                root->black_height_++;
-            }
-        }
-
-        std::pair<rb_tree_node_ptr_t &, base_tree_node_ptr_t> find_equal_or_insert_pos(const Key &key)
-        {
-            rb_tree_node_ptr_t *parent_link = &(end_node.left);
-            rb_tree_node_ptr_t parent_link_point_to = *parent_link;
-            if (parent_link_point_to != nullptr)
-            {
-                while (true)
-                {
-                    if (value_comp()(key, parent_link_point_to->value_.key))
-                    {
-                        if (parent_link_point_to->left != nullptr)
-                        {
-                            parent_link = &(parent_link_point_to->left);
-                            parent_link_point_to = parent_link_point_to->left;
-                        }
-                        else
-                        {
-                            return {parent_link_point_to->left, parent_link_point_to};
-                        }
-                    }
-                    else if (value_comp()(parent_link_point_to->value_.key, key))
-                    {
-                        if (parent_link_point_to->right != nullptr)
-                        {
-                            parent_link = &(parent_link_point_to->right);
-                            parent_link_point_to = parent_link_point_to->right;
-                        }
-                        else
-                        {
-                            return {parent_link_point_to->right, parent_link_point_to};
-                        }
-                    }
-                    else
-                    {
-                        return {*parent_link, parent_link_point_to};
-                    }
-                }
-            }
-            return {*parent_link, &end_node};
-        }
-
-        template<class... Args>
-        std::pair<iterator, bool> emplace_key_args(Key key, Args... args)
-        {
-
-            auto [child, parent] = find_equal_or_insert_pos(key);
-            if (child == nullptr)
-            {
-                rb_tree_node_ptr_t new_node = construct_node(std::forward<Key>(key), std::forward<Args>(args)...);
-                insert_node_at(parent, child, new_node);
-                return {iterator(new_node), true};
-            }
-            return {iterator(child), false};
-        }
-
-        template<class... Args>
-        std::pair<iterator, bool> emplace_args(Args...args)
-        {
-            std::unique_ptr<rb_tree_node_t> new_node = std::make_unique<>(std::forward<Args>(args)...);
-            auto [child, parent] = find_equal_or_insert_pos(new_node.get()->value_.key);
-            if (child == nullptr)
-            {
-                insert_node_at(parent, child, new_node.release());
-                return {new_node, true};
-            }
-
-            return {*child, false};
-        }
-
-        //        rb_tree_node_ptr
     public:
-        //        RedBlackTree();
-
-        RedBlackTree(MetadataUpdator updator_ = MetadataUpdator(), Compare comp_ = Compare())
+        template<class comparator_forward_t=comparator_t, class metadata_updator_forward_t=metadata_updator_t>
+        requires (std::is_same_v<comparator_t, std::remove_reference_t<comparator_forward_t>> &&
+                  std::is_same_v<metadata_updator_t, std::remove_reference_t<metadata_updator_forward_t>>)
+        rb_tree(metadata_updator_forward_t &&updator = metadata_updator_t(), comparator_forward_t &&comp = comparator_t())
                 :
-                size(0)
-                , end_node(nullptr, nullptr, nullptr)
-                , begin_node(&end_node)
-                , updator(std::move(updator_))
-                , comp(std::move(comp_))
+                end_node_(nullptr, nullptr, nullptr)
+                , begin_node_(&end_node_)
+                , updator_(std::forward<metadata_updator_forward_t>(updator))
+                , comp_(std::forward<comparator_forward_t>(comp))
+                , black_height_(1)
         {
 
         }
 
-        ~RedBlackTree()
+
+
+        ~rb_tree()
         {
-            delete end_node.left;
+            delete end_node_.left;
         }
 
-        inline iterator begin()
+        inline iterator begin() noexcept
         {
-            return iterator(begin_node);
+            return iterator(begin_node_);
         }
 
-        [[nodiscard]] inline const_iterator begin() const
+        [[nodiscard]] inline const_iterator begin() const noexcept
         {
-            return const_iterator(begin_node);
+            return const_iterator(begin_node_);
         }
 
-        inline iterator end()
+        inline iterator end() noexcept
         {
-            return iterator(&end_node);
+            return iterator(&end_node_);
         }
 
-        [[nodiscard]] inline const_iterator end() const
+        [[nodiscard]] inline const_iterator end() const noexcept
         {
-            return const_iterator(&end_node);
+            return const_iterator(&end_node_);
         }
 
-        inline Compare &value_comp() noexcept
+        inline comparator_t &value_comp() noexcept
         {
-            return comp;
+            return comp_;
         }
 
-        [[nodiscard]] inline const Compare &value_comp() const noexcept
+        [[nodiscard]] inline const comparator_t &value_comp() const noexcept
         {
-            return comp;
+            return comp_;
         }
 
-        iterator lower_bound(const Key &key)
+        iterator lower_bound(const key_t &key)
         {
-            return BBST::lower_bound(end(), key, value_comp());
+            return BBST::lower_bound(end(), key, comp_);
         }
 
-        [[nodiscard]] const_iterator lower_bound(const Key &key) const
+        [[nodiscard]] const_iterator lower_bound(const key_t &key) const
         {
-            return BBST::lower_bound(end(), key, value_comp());
+            return BBST::lower_bound(end(), key, comp_);
         }
 
-        iterator find(const Key &key)
+        iterator find(const key_t &key)
         {
-            return BBST::find(end(), key, value_comp());
+            return BBST::find(end(), key, comp_);
         }
 
-        [[nodiscard]] const_iterator find(const Key &key) const
+        [[nodiscard]] const_iterator find(const key_t &key) const
         {
-            return BBST::find(end(), key, value_comp());
+            return BBST::find(end(), key, comp_);
         }
 
         //key,metadata,mapped
         template<class... Args>
-        inline std::pair<iterator, bool> try_emplace(Key key, Args...args)
+        inline std::pair<iterator, bool> try_emplace(key_t key, Args...args)
         {
-            return emplace_key_args(std::forward<Key>(key), std::forward<Args>(args)...);
+            return emplace_key_args(std::forward<key_t>(key), std::forward<Args>(args)...);
         }
 
-        value_type &operator[](const Key &key)
+        template<class key_forward_t>
+        requires std::is_same_v<key_t, std::remove_reference_t<key_forward_t>>
+        mapped_t &operator[](key_forward_t &&key)
         {
-            return emplace_key_args(key).first.operator*();
+            return emplace_key_args(std::forward<key_forward_t>(key)).first->mapped;
         }
 
-        value_type &operator[](Key &&key)
-        {
-            return emplace_key_args(std::move(key)).first.operator*();
-        }
-
+        //TODO:
         void tree_remove(rb_tree_node_ptr_t z) noexcept
         {
-            rb_tree_node_ptr_t root = end_node->left;
+            rb_tree_node_ptr_t root = end_node_->left;
             // z will be removed from the tree.  Client still needs to destruct/deallocate it
             // y is either z, or if z has two children, tree_next(z).
             // y will have at most one child.
@@ -503,7 +624,8 @@ namespace BBST
             else
             {
                 y = z->right;
-                while (y->left != nullptr) y = y->left;
+                while (y->left != nullptr)
+                    y = y->left;
             }
             // x is y's possibly null single child
             rb_tree_node_ptr_t x = y->left != nullptr ? y->left : y->right;
@@ -588,8 +710,7 @@ namespace BBST
                                 w = w->left->right;
                             }
                             // w->isBlack is now true, w may have null children
-                            if ((w->left == nullptr || w->left->is_black_) &&
-                                (w->right == nullptr || w->right->is_black_))
+                            if ((w->left == nullptr || w->left->is_black_) && (w->right == nullptr || w->right->is_black_))
                             {
                                 w->is_black_ = false;
                                 x = parent_unsafe(w);
@@ -610,7 +731,7 @@ namespace BBST
                                     // w left child is non-null and red
                                     w->left->is_black_ = true;
                                     w->is_black_ = false;
-                                    tree_right_rotate(w);
+                                    unguarded_tree_right_rotate(w);
                                     // w is known not to be root, so root hasn't changed
                                     // reset sibling, and it still can't be null
                                     w = parent_unsafe(w);
@@ -629,7 +750,7 @@ namespace BBST
                             {
                                 w->is_black_ = true;
                                 parent_unsafe(w)->is_black_ = false;
-                                tree_right_rotate(parent_unsafe(w));
+                                unguarded_tree_right_rotate(parent_unsafe(w));
                                 // x is still valid
                                 // reset root only if necessary
                                 if (root == w->right)
@@ -638,8 +759,7 @@ namespace BBST
                                 w = w->right->left;
                             }
                             // w->isBlack is now true, w may have null children
-                            if ((w->left == nullptr || w->left->is_black_) &&
-                                (w->right == nullptr || w->right->is_black_))
+                            if ((w->left == nullptr || w->left->is_black_) && (w->right == nullptr || w->right->is_black_))
                             {
                                 w->is_black_ = false;
                                 x = parent_unsafe(w);
@@ -669,7 +789,7 @@ namespace BBST
                                 w->is_black_ = parent_unsafe(w)->is_black_;
                                 parent_unsafe(w)->is_black_ = true;
                                 w->left->is_black_ = true;
-                                tree_right_rotate(parent_unsafe(w));
+                                unguarded_tree_right_rotate(parent_unsafe(w));
                                 break;
                             }
                         }

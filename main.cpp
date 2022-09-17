@@ -1,12 +1,10 @@
 #include <iostream>
 #include <numeric>
+#include <bits/stdc++.h>
 
 #include "rb_tree.h"
+#include "avl_tree.h"
 
-namespace BBST
-{
-
-}
 
 int main()
 {
@@ -20,6 +18,12 @@ int main()
         ptr->metadata() = get(ptr->left) + get(ptr->right) + ptr->key();
     };
 
-    BBST::RedBlackTree<int, int, int, decltype(node_updator)> bst;
-    bst[0], bst[1], bst[2];
+    std::array<int,9> s{};
+    std::iota(s.begin(),s.end(),0);
+    do {
+        BBST::avl_tree<int, int, int, decltype(node_updator)> bst;
+        for(int i:s) bst.try_emplace(i);
+        for(auto p:bst) std::cout << p.key << ' ';
+        std::cout << '\n';
+    } while(std::next_permutation(s.begin(),s.end()));
 }
