@@ -6,4 +6,4 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fsanitize=address -fsanitize=undefin
 
 #add_library(BBST SHARED tree_utils.h rb_tree.h)
 
-add_executable(testing main.cpp)
+add_executable(testing main.cpp rb_tree_custom_invoke.h)

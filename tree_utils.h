@@ -253,25 +253,25 @@ namespace BBST
     class tree_bidirectional_const_iterator_
     {
     public:
-        typedef base_tree_node_t *base_tree_node_ptr_t;
+        typedef const base_tree_node_t *const_base_tree_node_ptr_t;
         typedef std::bidirectional_iterator_tag iterator_category;
 
     private:
-        base_tree_node_ptr_t ptr;
+        const_base_tree_node_ptr_t ptr;
 
         typedef typename base_tree_node_t::impl_type impl_type;
 
     public:
         typedef typename impl_type::value_type value_type;
-        typedef base_tree_node_ptr_t pointer;
+        typedef const_base_tree_node_ptr_t pointer;
 
-        explicit inline tree_bidirectional_const_iterator_(base_tree_node_ptr_t ptr_) noexcept: ptr(ptr_)
+        explicit inline tree_bidirectional_const_iterator_(const_base_tree_node_ptr_t ptr_) noexcept: ptr(ptr_)
         {}
 
         inline tree_bidirectional_const_iterator_(tree_bidirectional_iterator_<base_tree_node_t> o) : ptr(o.get())
         {};
 
-        inline const base_tree_node_ptr_t get() const noexcept
+        inline const const_base_tree_node_ptr_t get() const noexcept
         {
             return ptr;
         }
@@ -545,6 +545,11 @@ namespace BBST
             return static_cast<impl_type *>(this);
         }
 
+        const impl_type *self_downcast_unsafe() const
+        {
+            return static_cast<const impl_type *>(this);
+        }
+
         static inline base_tree_node *zero_initialize()
         {
             return new base_tree_node(nullptr, nullptr, nullptr);
@@ -554,7 +559,7 @@ namespace BBST
 
 //value_type
 //TODO: compressed_pair for key and mapped (for set)
-// https://stackoverflow.com/questions/31623423/why-does-libcs-implementation-of-map-use-this-union
+//TODO: https://stackoverflow.com/questions/31623423/why-does-libcs-implementation-of-map-use-this-union
 namespace BBST
 {
     template<class key_t, class mapped_t, class metadata_t>
@@ -599,12 +604,13 @@ namespace BBST
         return ptr;
     }
 
-    template<class Key, class It, class Comp>
-    requires (std::predicate<const Comp &, const Key &, const Key &> && std::same_as<Key, typename It::key_type>)
-    It lower_bound(It root_parent, const Key &key, const Comp &comp)
+    template<class key_t, class base_tree_node_ptr_t, class comparator_t>
+    requires (std::predicate<const comparator_t &, const key_t &, const key_t &> &&
+              std::same_as<const key_t, typename std::remove_pointer_t<base_tree_node_ptr_t>::impl_type::key_type>)
+    base_tree_node_ptr_t lower_bound(base_tree_node_ptr_t root_parent, const key_t &key, const comparator_t &comp)
     {
 
-        auto result = root_parent.get();
+        base_tree_node_ptr_t result = root_parent;
         auto current = result->left;
         while (current != nullptr)
         {
@@ -613,15 +619,16 @@ namespace BBST
             else
                 current = current->right;
         }
-        return {result};
+        return result;
     }
 
-    template<class Key, class It, class Comp>
-    requires (std::predicate<const Comp &, const Key &, const Key &> && std::same_as<Key, typename It::key_type>)
-    It find(It root_parent, const Key &key, const Comp &comp)
+    template<class key_t, class base_tree_node_ptr_t, class comparator_t>
+    requires (std::predicate<const comparator_t &, const key_t &, const key_t &> &&
+              std::same_as<const key_t, typename std::remove_pointer_t<base_tree_node_ptr_t>::impl_type::key_type>)
+    base_tree_node_ptr_t find(base_tree_node_ptr_t root_parent, const key_t &key, const comparator_t &comp)
     {
-        It p = lower_bound(root_parent, key, comp);
-        if (p != root_parent && comp(key, p->key))
+        base_tree_node_ptr_t p = lower_bound(root_parent, key, comp);
+        if (p != root_parent && !comp(key, p->self_downcast_unsafe()->key()))
             return p;
         return root_parent;
     }

@@ -60,22 +60,14 @@ namespace BBST
             return false;
         if (black_height != header.black_height_)
             return false;
-        if (header.root_ != nullptr)
-        {
-            if (tree_min(header.root_) != header.begin_)
-                return false;
-        }
-        else
-        {
-            if (header.begin_ != nullptr)
-                return false;
-        }
         return true;
     }
 }
 
+//rb_tree_node
 namespace BBST
 {
+
     template<class exposure_t>
     struct rb_tree_node : public base_tree_node<rb_tree_node<exposure_t>>
     {
@@ -84,7 +76,9 @@ namespace BBST
         typedef typename tree_node_base_traits<rb_tree_node>::value_type value_type;
         typedef typename tree_node_base_traits<rb_tree_node>::key_type key_type;
         typedef typename tree_node_base_traits<rb_tree_node>::metadata_type metadata_type;
-        bool is_black_: 1;
+        bool is_black_
+        //        : 1
+        ;
         value_type value_;
 
         template<class... Args>
@@ -136,56 +130,48 @@ namespace BBST
         typedef typename exposure_t::metadata_type metadata_type;
     };
 
+}
+//rb_tree_header
+namespace BBST
+{
     //header is non-owning type, mainly used as a bookkeeping struct for join-split operator
-    template<class Key, class Mapped, class Metadata>
+    template<class key_t, class mapped_t, class metadata_t>
     struct rb_tree_header
     {
     private:
-        typedef rb_tree_node<BBST::exposure<Key, Mapped, Metadata>> rb_tree_node_t;
+        typedef rb_tree_node<BBST::exposure<key_t, mapped_t, metadata_t>> rb_tree_node_t;
         typedef rb_tree_node_t *rb_tree_node_ptr_t;
         typedef base_tree_node<rb_tree_node_t> base_tree_node_t;
-        typedef rb_tree_header<Key, Mapped, Metadata> rb_tree_header_t;
+        typedef rb_tree_header<key_t, mapped_t, metadata_t> rb_tree_header_t;
 
     public:
-        typedef tree_forward_iterator_<base_tree_node_t> iterator;
-        typedef tree_forward_const_iterator_<base_tree_node_t> const_iterator;
-
         rb_tree_node_ptr_t root_;
-        rb_tree_node_ptr_t begin_;
         uint32_t black_height_;
 
-        rb_tree_header(rb_tree_node_ptr_t root, rb_tree_node_ptr_t begin, uint32_t black_height)
+        rb_tree_header(rb_tree_node_ptr_t root, uint32_t black_height)
                 :
                 root_(root)
-                , begin_(begin)
                 , black_height_(black_height)
         {}
 
-        inline iterator begin() noexcept
+        static inline rb_tree_header empty_header()
         {
-            return iterator(begin_);
+            return {nullptr, 1};
         }
 
-        inline const_iterator begin() const noexcept
+        [[nodiscard]] bool empty() const
         {
-            return const_iterator(begin_);
-        };
-
-        inline iterator end() noexcept
-        {
-            return iterator(root_->parent);
+            return root_ == nullptr;
         }
 
-        inline const_iterator end() const noexcept
-        {
-            return const_iterator(root_->parent);
-        }
+        template<class key_holder_t, class mapped_holder_t, class metadata_holder_t, class metadata_updator_holder_t, class comparator_holder_t, class tag_holder_t> friend
+        class rb_tree_custom_invoke;
     };
 
     /*
      * Pre-condition: ptr must be red. root is either ptr or black
      *                root is ptr's ancestor
-     *                red black subtree at ptr's invariant must be valid
+     *                red black subtree at ptr's invariant must be valid (yes please call updator for ptr before calling me)
      *                the only possible violation of subtree at root is two consecutive red at ptr
      * Post-condition: rb_subtree_invariant(root) != 0
      * This function is unaware of the existence of root->parent, and might return the new "rotated" root
@@ -355,23 +341,16 @@ namespace BBST
         ASSERT(right.root_ == nullptr || comparator(x->key(), BBST::tree_min(right.root_)->key()), "right tree must be greater than x");
         if (left.black_height_ == right.black_height_)
         {
+            x->left = left.root_;
             if (left.root_)
-            {
-                x->left = left.root_;
                 left.root_->parent = x;
-            }
-            else
-            {
-                left.begin_ = x;
-            }
+            x->right = right.root_;
             if (right.root_)
-            {
-                x->right = right.root_;
                 right.root_->parent = x;
-            }
             x->is_black_ = true;
             left.root_ = x;
             left.black_height_++;
+            metadata_updator(x);
             ASSERT(rb_tree_header_invariant(left), "post condition failed");
             return left;
         }
@@ -396,13 +375,13 @@ namespace BBST
 
             ptr->left = x;
             x->parent = ptr;
-            right.root_ = rb_tree_insert_fixup(x, right.root_);
+            metadata_updator(x);
+            right.root_ = rb_tree_insert_fixup(x, right.root_, metadata_updator);
             if (!right.root_->is_black_)
             {
                 right.root_->is_black_ = true;
                 right.black_height_++;
             }
-            right.begin_ = left.root_ == nullptr ? x : left.begin_;
             ASSERT(rb_tree_header_invariant(right), "post condition failed");
             return right;
         }
@@ -425,7 +404,8 @@ namespace BBST
                 x->left->parent = x;
             ptr->right = x;
             x->parent = ptr;
-            left.root_ = rb_tree_insert_fixup(x, left.root_);
+            metadata_updator(x);
+            left.root_ = rb_tree_insert_fixup(x, left.root_, metadata_updator);
             if (!left.root_->is_black_)
             {
                 left.root_->is_black_ = true;
@@ -436,7 +416,10 @@ namespace BBST
         }
     }
 
-
+}
+//rb_tree
+namespace BBST
+{
     template<class key_t, class mapped_t, class metadata_t, class metadata_updator_t, class comparator_t = std::less<key_t>>
     requires (std::predicate<const comparator_t &, const key_t &, const key_t &> &&
               std::regular_invocable<const metadata_updator_t &, rb_tree_node<BBST::exposure<key_t, mapped_t, metadata_t>> *>)
@@ -522,6 +505,17 @@ namespace BBST
             delete static_cast<rb_tree_node_ptr_t>(p.get());
         }
 
+        rb_tree(rb_tree_header_t header, const comparator_t &comp, const metadata_updator_t &updator)
+                :
+                black_height_(header.black_height_)
+                , end_node_(nullptr, header.root_, nullptr)
+                , begin_node_(header.root_ == nullptr ? &end_node_ : tree_min(header.root_))
+                , comp_(comp)
+                , updator_(updator)
+        {
+            if (header.root_) header.root_->parent = &end_node_;
+        }
+
     public:
         template<class comparator_forward_t=comparator_t, class metadata_updator_forward_t=metadata_updator_t>
         requires (std::is_same_v<comparator_t, std::remove_reference_t<comparator_forward_t>> &&
@@ -537,7 +531,16 @@ namespace BBST
 
         }
 
-
+        rb_tree(rb_tree &&other) noexcept
+                :
+                end_node_(nullptr, std::exchange(other.end_node_.left, nullptr), nullptr)
+                , begin_node_(std::exchange(other.begin_node_, &other.end_node_))
+                , black_height_(std::exchange(other.black_height_, 1))
+                , comp_(other.comp_)
+                , updator_(other.updator_)
+        {
+            if (end_node_.left) end_node_.left->parent = &end_node_;
+        }
 
         ~rb_tree()
         {
@@ -576,22 +579,27 @@ namespace BBST
 
         iterator lower_bound(const key_t &key)
         {
-            return BBST::lower_bound(end(), key, comp_);
+            return iterator(BBST::lower_bound(&end_node_, key, comp_));
         }
 
         [[nodiscard]] const_iterator lower_bound(const key_t &key) const
         {
-            return BBST::lower_bound(end(), key, comp_);
+            return const_iterator(BBST::lower_bound(&end_node_, key, comp_));
         }
 
         iterator find(const key_t &key)
         {
-            return BBST::find(end(), key, comp_);
+            return iterator(BBST::find(&end_node_, key, comp_));
         }
 
         [[nodiscard]] const_iterator find(const key_t &key) const
         {
-            return BBST::find(end(), key, comp_);
+            return const_iterator(BBST::find(&end_node_, key, comp_));
+        }
+
+        bool empty() const
+        {
+            return begin_node_ == &end_node_;
         }
 
         //key,metadata,mapped
@@ -797,7 +805,11 @@ namespace BBST
                 }
             }
         }
+
+        template<class key_holder_t, class mapped_holder_t, class metadata_holder_t, class metadata_updator_holder_t, class comparator_holder_t, class tag> friend
+        class rb_tree_custom_invoke;
     };
+
 }
 
 #endif //BBST_RB_TREE_H

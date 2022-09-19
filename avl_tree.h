@@ -474,22 +474,22 @@ namespace BBST
 
         iterator lower_bound(const key_t &key)
         {
-            return BBST::lower_bound(end(), key, comp_);
+            return iterator(BBST::lower_bound(&end_node_, key, comp_));
         }
 
         [[nodiscard]] const_iterator lower_bound(const key_t &key) const
         {
-            return BBST::lower_bound(end(), key, comp_);
+            return const_iterator(BBST::lower_bound(&end_node_, key, comp_));
         }
 
         iterator find(const key_t &key)
         {
-            return BBST::find(end(), key, comp_);
+            return iterator(BBST::find(&end_node_, key, comp_));
         }
 
         [[nodiscard]] const_iterator find(const key_t &key) const
         {
-            return BBST::find(end(), key, comp_);
+            return const_iterator(BBST::find(&end_node_, key, comp_));
         }
 
     };
