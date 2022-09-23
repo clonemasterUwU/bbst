@@ -6,7 +6,7 @@
 #include "tree_utils.h"
 
 //invariant debug
-namespace BBST
+namespace bbst
 {
 
     template<class avl_tree_node_ptr_t>
@@ -40,26 +40,14 @@ namespace BBST
     template<class avl_tree_header_t>
     bool avl_tree_header_invariant(avl_tree_header_t header)
     {
-        auto height = avl_tree_invariant(header.root_);
-        if (height == 0)
+        if (header.height_ == 0 || header.height_ != avl_tree_invariant(header.root_))
             return false;
-        if (height != header.height_)
-            return false;
-        if (header.root_ != nullptr)
-        {
-            if (tree_min(header.root_) != header.begin_)
-                return false;
-        }
-        else
-        {
-            if (header.begin_ != nullptr)
-                return false;
-        }
         return true;
     }
 }
 
-namespace BBST
+//avl_tree_node
+namespace bbst
 {
     template<class exposure_t>
     struct avl_tree_node : public base_tree_node<avl_tree_node<exposure_t>>
@@ -68,8 +56,7 @@ namespace BBST
         typedef typename tree_node_base_traits<avl_tree_node>::value_type value_type;
         typedef typename tree_node_base_traits<avl_tree_node>::key_type key_type;
         typedef typename tree_node_base_traits<avl_tree_node>::metadata_type metadata_type;
-        int32_t height_diff_
-        //                : 2
+        int32_t height_diff_//:2
         ;
         value_type value_;
 
@@ -121,53 +108,50 @@ namespace BBST
         typedef typename exposure_t::mapped_type mapped_type;
         typedef typename exposure_t::metadata_type metadata_type;
     };
+}
 
+//avl_tree_header
+namespace bbst
+{
     template<class key_t, class mapped_t, class metadata_t>
     struct avl_tree_header
     {
     private:
-        typedef avl_tree_node<BBST::exposure<key_t, mapped_t, metadata_t>> avl_tree_node_t;
+        typedef avl_tree_node<bbst::exposure<key_t, mapped_t, metadata_t>> avl_tree_node_t;
         typedef avl_tree_node_t *avl_tree_node_ptr_t;
         typedef base_tree_node<avl_tree_node_t> base_tree_node_t;
     public:
-        typedef tree_forward_iterator_<base_tree_node_t> iterator;
-        typedef tree_forward_const_iterator_<base_tree_node_t> const_iterator;
 
         avl_tree_node_ptr_t root_;
-        avl_tree_node_ptr_t begin_;
         uint32_t height_;
 
         typedef avl_tree_header<key_t, mapped_t, metadata_t> avl_tree_header_t;
 
         //        template<class metadata_updator_t>
-        avl_tree_header(avl_tree_node_ptr_t root, avl_tree_node_ptr_t begin, uint32_t height)
+        avl_tree_header(avl_tree_node_ptr_t root, uint32_t height)
                 :
                 root_(root)
-                , begin_(begin)
                 , height_(height)
         {}
 
-        inline iterator begin() noexcept
+        static inline avl_tree_header empty_header()
         {
-            return iterator(begin_);
+            return {nullptr, 1};
         }
 
-        inline const_iterator begin() const noexcept
+        [[nodiscard]] bool empty() const
         {
-            return const_iterator(begin_);
-        };
-
-        inline iterator end() noexcept
-        {
-            return iterator(root_->parent);
+            return root_ == nullptr;
         }
 
-        inline const_iterator end() const noexcept
-        {
-            return const_iterator(root_->parent);
-        }
+        template<class key_holder_t, class mapped_holder_t, class metadata_holder_t, class metadata_updator_holder_t, class comparator_holder_t, class tag_holder_t> friend
+        class avl_tree_custom_invoke;
     };
+}
 
+//helper
+namespace bbst
+{
     template<class avl_tree_node_ptr_t, class metadata_updator_t>
     std::pair<bool, avl_tree_node_ptr_t> avl_tree_insert_fixup(avl_tree_node_ptr_t Z, avl_tree_node_ptr_t root
                                                                , const metadata_updator_t &updator) noexcept(std::is_nothrow_invocable_v<const metadata_updator_t &, avl_tree_node_ptr_t>)
@@ -306,6 +290,7 @@ namespace BBST
                     if (X->height_diff_ > 0)
                     {
                         X->height_diff_ = 0;
+                        height_inc = false;
                         break;
                     }
                     X->height_diff_ = -1;
@@ -321,9 +306,87 @@ namespace BBST
         return {height_inc, Z};
     }
 
+    template<class avl_tree_header_t, class avl_tree_node_ptr_t, class metadata_updator_t, class comparator_t>
+    avl_tree_header_t avl_tree_join_x(avl_tree_header_t left, avl_tree_node_ptr_t x, avl_tree_header_t right, const metadata_updator_t &metadata_updator
+                                      , const comparator_t &comparator) noexcept(std::is_nothrow_invocable_v<const metadata_updator_t &, avl_tree_node_ptr_t>)
+    {
+        ASSERT(avl_tree_header_invariant(left), "left header invariant false");
+        ASSERT(left.root_ == nullptr || comparator(bbst::tree_max(left.root_)->key(), x->key()), "left tree must be less than x");
+        ASSERT(avl_tree_header_invariant(right), "right header invariant false");
+        ASSERT(right.root_ == nullptr || comparator(x->key(), bbst::tree_min(right.root_)->key()), "right tree must be greater than x");
+        if (left.height_ > right.height_ + 1)
+        {
+            avl_tree_node_ptr_t ptr = left.root_;
+            uint32_t left_height = left.height_;
+            uint32_t right_height = right.height_;
+            while (true)
+            {
+                left_height -= ptr->height_diff_ < 0 ? 2 : 1;
+                if (left_height <= right_height + 1) break;
+                ptr = ptr->right;
+            }
+            x->left = ptr->right;
+            if (x->left) x->left->parent = x;
+            x->right = right.root_;
+            if (x->right) x->right->parent = x;
+            x->height_diff_ = left_height < right_height ? 1 : left_height == right_height ? 0 : -1;
+            ptr->right = x;
+            x->parent = ptr;
+            metadata_updator(x);
+            auto [height_inc, new_root] = avl_tree_insert_fixup(x, left.root_, metadata_updator);
+            left.root_ = new_root;
+            left.height_ += height_inc;
+            ASSERT(avl_tree_header_invariant(left), "post condition failed");
+            return left;
+        }
+        else if (right.height_ > left.height_ + 1)
+        {
+            avl_tree_node_ptr_t ptr = right.root_;
+            uint32_t left_height = left.height_;
+            uint32_t right_height = right.height_;
+            while (true)
+            {
+                right_height -= ptr->height_diff_ > 0 ? 2 : 1;
+                if (right_height <= left_height + 1) break;
+                ptr = ptr->left;
+            }
+            x->left = left.root_;
+            if (x->left) x->left->parent = x;
+            x->right = ptr->left;
+            if (x->right) x->right->parent = x;
+            x->height_diff_ = left_height < right_height ? 1 : left_height == right_height ? 0 : -1;
+            ptr->left = x;
+            x->parent = ptr;
+            metadata_updator(x);
+            auto [height_inc, new_root] = avl_tree_insert_fixup(x, right.root_, metadata_updator);
+            right.root_ = new_root;
+            right.height_ += height_inc;
+            ASSERT(avl_tree_header_invariant(right), "post condition failed");
+            return right;
+        }
+        else
+        {
+            x->left = left.root_;
+            if (x->left) x->left->parent = x;
+            x->right = right.root_;
+            if (x->right) x->right->parent = x;
+            left.root_ = x;
+            x->height_diff_ = left.height_ < right.height_ ? 1 : left.height_ == right.height_ ? 0 : -1;
+            left.height_ = std::max(left.height_, right.height_) + 1;
+            metadata_updator(x);
+            ASSERT(avl_tree_header_invariant(left), "post condition failed");
+            return left;
+        }
+    }
+
+}
+
+//avl_tree
+namespace bbst
+{
     template<class key_t, class mapped_t, class metadata_t, class metadata_updator_t, class comparator_t=std::less<key_t>>
     requires (std::predicate<const comparator_t &, const key_t &, const key_t &> &&
-              std::regular_invocable<const metadata_updator_t &, rb_tree_node<BBST::exposure<key_t, mapped_t, metadata_t>> *>)
+              std::regular_invocable<const metadata_updator_t &, rb_tree_node<bbst::exposure<key_t, mapped_t, metadata_t>> *>)
     class avl_tree
     {
     private:
@@ -352,7 +415,7 @@ namespace BBST
 
         std::pair<avl_tree_node_ptr_t &, base_tree_node_ptr_t> inline find_equal_or_insert_pos(const key_t &key)
         {
-            return BBST::find_equal_or_insert_pos<key_t, base_tree_node_ptr_t, avl_tree_node_ptr_t, comparator_t>(key, &end_node_, comp_);
+            return bbst::find_equal_or_insert_pos<key_t, base_tree_node_ptr_t, avl_tree_node_ptr_t, comparator_t>(key, &end_node_, comp_);
         }
 
         void insert_node_at(base_tree_node_ptr_t parent, avl_tree_node_ptr_t &child, avl_tree_node_ptr_t new_node) noexcept
@@ -360,6 +423,7 @@ namespace BBST
             new_node->left = nullptr;
             new_node->right = nullptr;
             new_node->parent = parent;
+            updator_(new_node);
             child = new_node;
             if (begin_node_->left != nullptr)
                 begin_node_ = begin_node_->left;
@@ -382,11 +446,22 @@ namespace BBST
             return {iterator(child), false};
         }
 
+        avl_tree(avl_tree_header_t header, const metadata_updator_t &updator, const comparator_t &comp)
+                :
+                height_(header.height_)
+                , end_node_(nullptr, header.root_, nullptr)
+                , begin_node_(header.root_ == nullptr ? &end_node_ : tree_min(header.root_))
+                , comp_(comp)
+                , updator_(updator)
+        {
+            if (header.root_ != nullptr) header.root_->parent = &end_node_;
+        }
+
     public:
 
         template<class comparator_forward_t=comparator_t, class metadata_updator_forward_t=metadata_updator_t>
-        requires (std::is_same_v<comparator_t, std::remove_reference_t<comparator_forward_t>> &&
-                  std::is_same_v<metadata_updator_t, std::remove_reference_t<metadata_updator_forward_t>>)
+        requires (std::is_same_v<comparator_t, std::decay_t<comparator_forward_t>> &&
+                  std::is_same_v<metadata_updator_t, std::decay_t<metadata_updator_forward_t>>)
         avl_tree(metadata_updator_forward_t &&updator = metadata_updator_t(), comparator_forward_t &&comp = comparator_t())
                 :
                 end_node_(nullptr, nullptr, nullptr)
@@ -394,8 +469,17 @@ namespace BBST
                 , updator_(std::forward<metadata_updator_forward_t>(updator))
                 , comp_(std::forward<comparator_forward_t>(comp))
                 , height_(1)
-        {
+        {}
 
+        avl_tree(avl_tree &&other) noexcept(std::is_nothrow_move_constructible_v<comparator_t> && std::is_nothrow_move_constructible_v<metadata_updator_t>)
+                :
+                end_node_(nullptr, std::exchange(other.end_node_.left, nullptr), nullptr)
+                , begin_node_(other.begin_node_ == &other.end_node_ ? &end_node_ : std::exchange(other.begin_node_, &other.end_node_))
+                , height_(std::exchange(other.height_, 1))
+                , comp_(std::move(other.comp_))
+                , updator_(std::move(other.updator_))
+        {
+            if (end_node_.left) end_node_.left->parent = &end_node_;
         }
 
         template<class... Args>
@@ -408,39 +492,6 @@ namespace BBST
         {
             delete end_node_.left;
         }
-        //        avl_tree_header_t avl_tree_join_x(avl_tree_header_t left, avl_tree_node_ptr_t x, avl_tree_header_t right
-        //                                          , const metadata_updator_t &updator
-        //                                          , const comparator_t &comparator) noexcept(std::is_nothrow_invocable_v<const metadata_updator_t &, avl_tree_node_ptr_t>)
-        //        {
-        //            ASSERT(avl_tree_header_invariant(left),"left header invariant false");
-        //            ASSERT(left.root_ == nullptr || comparator(BBST::tree_max(left.root_)->key(), x->key()),
-        //                   "left tree must be less than x");
-        //            ASSERT(avl_tree_header_invariant(right), "right header invariant false");
-        //            ASSERT(right.root_ == nullptr || comparator(x->key(), BBST::tree_min(right.root_)->key()),
-        //                   "right tree must be greater than x");
-        //            if (left.height_ == right.height_)
-        //            {
-        //                if (left.root_)
-        //                {
-        //                    x->left = left.root_;
-        //                    left.root_->parent = x;
-        //                }
-        //                if (right.root_)
-        //                {
-        //                    x->right = right.root_;
-        //                    right.root_->parent = x;
-        //                }
-        //                x->height_diff_ = 0;
-        //                left.root_ = x;
-        //                left.height_++;
-        //                return left;
-        //            } else if(){
-        //
-        //            }
-        //        }
-
-
-
 
         inline iterator begin() noexcept
         {
@@ -474,24 +525,26 @@ namespace BBST
 
         iterator lower_bound(const key_t &key)
         {
-            return iterator(BBST::lower_bound(&end_node_, key, comp_));
+            return iterator(bbst::lower_bound(&end_node_, key, comp_));
         }
 
         [[nodiscard]] const_iterator lower_bound(const key_t &key) const
         {
-            return const_iterator(BBST::lower_bound(&end_node_, key, comp_));
+            return const_iterator(bbst::lower_bound(&end_node_, key, comp_));
         }
 
         iterator find(const key_t &key)
         {
-            return iterator(BBST::find(&end_node_, key, comp_));
+            return iterator(bbst::find(&end_node_, key, comp_));
         }
 
         [[nodiscard]] const_iterator find(const key_t &key) const
         {
-            return const_iterator(BBST::find(&end_node_, key, comp_));
+            return const_iterator(bbst::find(&end_node_, key, comp_));
         }
 
+        template<class key_holder_t, class mapped_holder_t, class metadata_holder_t, class metadata_updator_holder_t, class comparator_holder_t, class tag> friend
+        class avl_tree_custom_invoke;
     };
 
 }

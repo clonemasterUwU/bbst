@@ -6,10 +6,10 @@
 #include <concepts>
 #include <iostream>
 
-//debug assert
-namespace BBST
+namespace bbst
 {
 #ifndef NDEBUG
+//debug assert, C++23 std::stack_trace waiting room
 #define ASSERT(condition, message) \
     do { \
         if (! (condition)) { \
@@ -24,7 +24,7 @@ namespace BBST
 }
 
 //pointer template
-namespace BBST
+namespace bbst
 {
 
     template<class base_tree_node_t>
@@ -326,7 +326,7 @@ namespace BBST
 }
 
 //tree rotate
-namespace BBST
+namespace bbst
 {
     template<class base_tree_node_ptr_t>
     inline bool tree_is_left_child(base_tree_node_ptr_t ptr) noexcept
@@ -510,7 +510,7 @@ namespace BBST
 }
 
 //tree_node typedef
-namespace BBST
+namespace bbst
 {
     //indirect type passing with crtp https://stackoverflow.com/questions/6006614/c-static-polymorphism-crtp-and-using-typedefs-from-derived-classes
     template<typename derived_t>
@@ -560,7 +560,7 @@ namespace BBST
 //value_type
 //TODO: compressed_pair for key and mapped (for set)
 //TODO: https://stackoverflow.com/questions/31623423/why-does-libcs-implementation-of-map-use-this-union
-namespace BBST
+namespace bbst
 {
     template<class key_t, class mapped_t, class metadata_t>
     struct exposure
@@ -586,7 +586,7 @@ namespace BBST
     };
 }
 //tree utils
-namespace BBST
+namespace bbst
 {
     template<class tree_node_base_ptr_t>
     tree_node_base_ptr_t tree_min(tree_node_base_ptr_t ptr)
@@ -680,7 +680,7 @@ namespace BBST
 
 }
 
-namespace BBST
+namespace bbst
 {
     template<class T>
     T abs_difference(T a, T b)

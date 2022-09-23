@@ -5,8 +5,21 @@
 #include <memory>
 #include "tree_utils.h"
 
+namespace bbst
+{
+    template<class exposure_t>
+    struct rb_tree_node;
+
+    template<class key_t, class mapped_t, class metadata_t>
+    struct rb_tree_header;
+
+    template<class key_t, class mapped_t, class metadata_t, class metadata_updator_t, class comparator_t>
+    requires (std::predicate<const comparator_t &, const key_t &, const key_t &> &&
+              std::regular_invocable<const metadata_updator_t &, rb_tree_node<bbst::exposure<key_t, mapped_t, metadata_t>> *>)
+    class rb_tree;
+}
 //invariant debug
-namespace BBST
+namespace bbst
 {
 
     template<class rb_tree_node_ptr_t>
@@ -65,7 +78,7 @@ namespace BBST
 }
 
 //rb_tree_node
-namespace BBST
+namespace bbst
 {
 
     template<class exposure_t>
@@ -76,8 +89,7 @@ namespace BBST
         typedef typename tree_node_base_traits<rb_tree_node>::value_type value_type;
         typedef typename tree_node_base_traits<rb_tree_node>::key_type key_type;
         typedef typename tree_node_base_traits<rb_tree_node>::metadata_type metadata_type;
-        bool is_black_
-        //        : 1
+        bool is_black_//: 1
         ;
         value_type value_;
 
@@ -131,15 +143,17 @@ namespace BBST
     };
 
 }
+
 //rb_tree_header
-namespace BBST
+namespace bbst
 {
+
     //header is non-owning type, mainly used as a bookkeeping struct for join-split operator
     template<class key_t, class mapped_t, class metadata_t>
     struct rb_tree_header
     {
     private:
-        typedef rb_tree_node<BBST::exposure<key_t, mapped_t, metadata_t>> rb_tree_node_t;
+        typedef rb_tree_node<bbst::exposure<key_t, mapped_t, metadata_t>> rb_tree_node_t;
         typedef rb_tree_node_t *rb_tree_node_ptr_t;
         typedef base_tree_node<rb_tree_node_t> base_tree_node_t;
         typedef rb_tree_header<key_t, mapped_t, metadata_t> rb_tree_header_t;
@@ -167,7 +181,11 @@ namespace BBST
         template<class key_holder_t, class mapped_holder_t, class metadata_holder_t, class metadata_updator_holder_t, class comparator_holder_t, class tag_holder_t> friend
         class rb_tree_custom_invoke;
     };
+}
 
+//helper
+namespace bbst
+{
     /*
      * Pre-condition: ptr must be red. root is either ptr or black
      *                root is ptr's ancestor
@@ -181,9 +199,8 @@ namespace BBST
     rb_tree_node_ptr_t rb_tree_insert_fixup(rb_tree_node_ptr_t ptr, rb_tree_node_ptr_t root
                                             , const metadata_updator_t &updator_) noexcept(std::is_nothrow_invocable_v<const metadata_updator_t &, rb_tree_node_ptr_t>)
     {
-        ASSERT(!ptr->is_black_ &&
-               (ptr == root || (rb_subtree_invariant(ptr->parent->left) == rb_subtree_invariant(ptr->parent->right) && root->is_black_)),
-               "precondition failed");
+        ASSERT(!ptr->is_black_ && (ptr == root || (rb_subtree_invariant(ptr->parent->left) == rb_subtree_invariant(ptr->parent->right) &&
+                                                   root->is_black_)), "precondition failed");
         while (ptr != root && !ptr->parent_unsafe()->is_black_)
         {
             //ptr->parent is not root
@@ -201,11 +218,11 @@ namespace BBST
                 {
                     ptr = ptr->parent_unsafe();
                     ptr->is_black_ = true;
-                    updator_(ptr);
+                    updator_(ptr);//update U
                     ptr = ptr->parent_unsafe();
                     ptr->is_black_ = false;
                     ptrUncle->is_black_ = true;
-                    updator_(ptr);
+                    updator_(ptr);//update G
                 }
                 else
                 {
@@ -220,7 +237,7 @@ namespace BBST
                     {
                         ptr = ptr->parent_unsafe();
                         unguarded_tree_left_rotate(ptr);
-                        updator_(ptr);
+                        updator_(ptr);//update P
                     }
                     /*
                      *      G(B)                  G(R)                  P(B)
@@ -231,21 +248,17 @@ namespace BBST
                      */
                     ptr = ptr->parent_unsafe();
                     ptr->is_black_ = true;
-                    updator_(ptr);
+                    //                    updator_(ptr); // unnecessary update P
                     ptr = ptr->parent_unsafe();
                     ptr->is_black_ = false;
                     bool is_finish = ptr == root;
                     if (is_finish)
-                    {
                         tree_root_right_rotate(ptr);
-                    }
                     else
-                    {
                         unguarded_tree_right_rotate(ptr);
-                    }
-                    updator_(ptr);
+                    updator_(ptr); //update G
                     ptr = ptr->parent_unsafe();
-                    updator_(ptr);
+                    updator_(ptr); //update P
                     if (is_finish)
                     {
                         ASSERT(rb_tree_invariant(ptr), "post condition false");
@@ -258,7 +271,7 @@ namespace BBST
             {
                 rb_tree_node_ptr_t ptrUncle = ptr->parent->parent->left;
                 /*
-                 *     G(B)                 G(R) <- next C
+                 *     G(B)                 G2(R) <- next C
                  *    /    \               /    \
                  *   U(R)   P(R)   ->     U(B)   P(B)
                  *           \                    \
@@ -268,11 +281,11 @@ namespace BBST
                 {
                     ptr = ptr->parent_unsafe();
                     ptr->is_black_ = true;
-                    updator_(ptr);
+                    updator_(ptr); //update P
                     ptr = ptr->parent_unsafe();
                     ptr->is_black_ = false;
                     ptrUncle->is_black_ = true;
-                    updator_(ptr);
+                    updator_(ptr); // update G
                 }
                 else
                 {
@@ -287,7 +300,7 @@ namespace BBST
                     {
                         ptr = ptr->parent_unsafe();
                         unguarded_tree_right_rotate(ptr);
-                        updator_(ptr);
+                        updator_(ptr);//update P
                     }
                     /*
                      *      G(B)                  G(R)                                               P(B)
@@ -298,21 +311,17 @@ namespace BBST
                      */
                     ptr = ptr->parent_unsafe();
                     ptr->is_black_ = true;
-                    updator_(ptr);
+                    //                    updator_(ptr);//unnecessary
                     ptr = ptr->parent_unsafe();
                     ptr->is_black_ = false;
                     bool is_finish = ptr == root;
                     if (is_finish)
-                    {
                         tree_root_left_rotate(ptr);
-                    }
                     else
-                    {
                         unguarded_tree_left_rotate(ptr);
-                    }
-                    updator_(ptr);
+                    updator_(ptr);//update G
                     ptr = ptr->parent_unsafe();
-                    updator_(ptr);
+                    updator_(ptr);//update P
                     if (is_finish)
                     {
                         ASSERT(rb_tree_invariant(ptr), "post condition failed");
@@ -336,9 +345,9 @@ namespace BBST
                                     , const comparator_t &comparator) noexcept(std::is_nothrow_invocable_v<const metadata_updator_t &, rb_tree_node_ptr_t>)
     {
         ASSERT(rb_tree_header_invariant(left), "left header invariant false");
-        ASSERT(left.root_ == nullptr || comparator(BBST::tree_max(left.root_)->key(), x->key()), "left tree must be less than x");
+        ASSERT(left.root_ == nullptr || comparator(bbst::tree_max(left.root_)->key(), x->key()), "left tree must be less than x");
         ASSERT(rb_tree_header_invariant(right), "right header invariant false");
-        ASSERT(right.root_ == nullptr || comparator(x->key(), BBST::tree_min(right.root_)->key()), "right tree must be greater than x");
+        ASSERT(right.root_ == nullptr || comparator(x->key(), bbst::tree_min(right.root_)->key()), "right tree must be greater than x");
         if (left.black_height_ == right.black_height_)
         {
             x->left = left.root_;
@@ -364,15 +373,13 @@ namespace BBST
                     break;
                 ptr = ptr->left;
             }
-            x->is_black_ = false;
-
             x->left = left.root_;
-            x->right = ptr->left;
             if (x->left)
                 x->left->parent = x;
+            x->right = ptr->left;
             if (x->right)
                 x->right->parent = x;
-
+            x->is_black_ = false;
             ptr->left = x;
             x->parent = ptr;
             metadata_updator(x);
@@ -395,13 +402,13 @@ namespace BBST
                     break;
                 ptr = ptr->right;
             }
-            x->is_black_ = false;
             x->right = right.root_;
             x->left = ptr->right;
             if (x->right)
                 x->right->parent = x;
             if (x->left)
                 x->left->parent = x;
+            x->is_black_ = false;
             ptr->right = x;
             x->parent = ptr;
             metadata_updator(x);
@@ -415,14 +422,14 @@ namespace BBST
             return left;
         }
     }
-
 }
+
 //rb_tree
-namespace BBST
+namespace bbst
 {
     template<class key_t, class mapped_t, class metadata_t, class metadata_updator_t, class comparator_t = std::less<key_t>>
     requires (std::predicate<const comparator_t &, const key_t &, const key_t &> &&
-              std::regular_invocable<const metadata_updator_t &, rb_tree_node<BBST::exposure<key_t, mapped_t, metadata_t>> *>)
+              std::regular_invocable<const metadata_updator_t &, rb_tree_node<bbst::exposure<key_t, mapped_t, metadata_t>> *>)
     class rb_tree
     {
     private:
@@ -445,7 +452,7 @@ namespace BBST
 
         std::pair<rb_tree_node_ptr_t &, base_tree_node_ptr_t> inline find_equal_or_insert_pos(const key_t &key)
         {
-            return BBST::find_equal_or_insert_pos<key_t, base_tree_node_ptr_t, rb_tree_node_ptr_t, comparator_t>(key, &end_node_, comp_);
+            return bbst::find_equal_or_insert_pos<key_t, base_tree_node_ptr_t, rb_tree_node_ptr_t, comparator_t>(key, &end_node_, comp_);
         }
 
         void insert_node_at(base_tree_node_ptr_t parent, rb_tree_node_ptr_t &child, rb_tree_node_ptr_t new_node) noexcept
@@ -454,6 +461,7 @@ namespace BBST
             new_node->right = nullptr;
             new_node->parent = parent;
             child = new_node;
+            updator_(new_node);
             if (begin_node_->left != nullptr)
                 begin_node_ = begin_node_->left;
             rb_tree_node_ptr_t root = (end_node_.left = rb_tree_insert_fixup(new_node, end_node_.left, updator_));
@@ -505,7 +513,7 @@ namespace BBST
             delete static_cast<rb_tree_node_ptr_t>(p.get());
         }
 
-        rb_tree(rb_tree_header_t header, const comparator_t &comp, const metadata_updator_t &updator)
+        rb_tree(rb_tree_header_t header, const metadata_updator_t &updator, const comparator_t &comp)
                 :
                 black_height_(header.black_height_)
                 , end_node_(nullptr, header.root_, nullptr)
@@ -513,13 +521,13 @@ namespace BBST
                 , comp_(comp)
                 , updator_(updator)
         {
-            if (header.root_) header.root_->parent = &end_node_;
+            if (header.root_ != nullptr) header.root_->parent = &end_node_;
         }
 
     public:
         template<class comparator_forward_t=comparator_t, class metadata_updator_forward_t=metadata_updator_t>
-        requires (std::is_same_v<comparator_t, std::remove_reference_t<comparator_forward_t>> &&
-                  std::is_same_v<metadata_updator_t, std::remove_reference_t<metadata_updator_forward_t>>)
+        requires (std::is_same_v<comparator_t, std::decay_t<comparator_forward_t>> &&
+                  std::is_same_v<metadata_updator_t, std::decay_t<metadata_updator_forward_t>>)
         rb_tree(metadata_updator_forward_t &&updator = metadata_updator_t(), comparator_forward_t &&comp = comparator_t())
                 :
                 end_node_(nullptr, nullptr, nullptr)
@@ -531,13 +539,13 @@ namespace BBST
 
         }
 
-        rb_tree(rb_tree &&other) noexcept
+        rb_tree(rb_tree &&other) noexcept(std::is_nothrow_move_constructible_v<comparator_t> && std::is_nothrow_move_constructible_v<metadata_updator_t>)
                 :
                 end_node_(nullptr, std::exchange(other.end_node_.left, nullptr), nullptr)
-                , begin_node_(std::exchange(other.begin_node_, &other.end_node_))
+                , begin_node_(other.begin_node_ == &other.end_node_ ? &end_node_ : std::exchange(other.begin_node_, &other.end_node_))
                 , black_height_(std::exchange(other.black_height_, 1))
-                , comp_(other.comp_)
-                , updator_(other.updator_)
+                , comp_(std::move(other.comp_))
+                , updator_(std::move(other.updator_))
         {
             if (end_node_.left) end_node_.left->parent = &end_node_;
         }
@@ -579,25 +587,25 @@ namespace BBST
 
         iterator lower_bound(const key_t &key)
         {
-            return iterator(BBST::lower_bound(&end_node_, key, comp_));
+            return iterator(bbst::lower_bound(&end_node_, key, comp_));
         }
 
         [[nodiscard]] const_iterator lower_bound(const key_t &key) const
         {
-            return const_iterator(BBST::lower_bound(&end_node_, key, comp_));
+            return const_iterator(bbst::lower_bound(&end_node_, key, comp_));
         }
 
         iterator find(const key_t &key)
         {
-            return iterator(BBST::find(&end_node_, key, comp_));
+            return iterator(bbst::find(&end_node_, key, comp_));
         }
 
         [[nodiscard]] const_iterator find(const key_t &key) const
         {
-            return const_iterator(BBST::find(&end_node_, key, comp_));
+            return const_iterator(bbst::find(&end_node_, key, comp_));
         }
 
-        bool empty() const
+        [[nodiscard]] bool empty() const
         {
             return begin_node_ == &end_node_;
         }
