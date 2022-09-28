@@ -574,9 +574,9 @@ namespace bbst
         typedef metadata_t metadata_type;
 
         template<class key_forward_t=key_t, class mapped_forward_t= mapped_t, class metadata_forward_t=metadata_t>
-        requires (std::is_same_v<key_t, std::remove_reference_t<key_forward_t>> &&
-                  std::is_same_v<mapped_t, std::remove_reference_t<mapped_forward_t>> &&
-                  std::is_same_v<metadata_type, std::remove_reference_t<metadata_forward_t>>)
+        requires (std::is_same_v<key_t, std::decay_t<key_forward_t>> &&
+                  std::is_same_v<mapped_t, std::decay_t<mapped_forward_t>> &&
+                  std::is_same_v<metadata_type, std::decay_t<metadata_forward_t>>)
         explicit exposure(key_forward_t &&key_ = key_t(), metadata_forward_t &&metadata_ = metadata_t(), mapped_forward_t &&mapped_ = mapped_t())
                 :
                 key(std::forward<key_forward_t>(key_))
@@ -585,6 +585,7 @@ namespace bbst
         {}
     };
 }
+
 //tree utils
 namespace bbst
 {
@@ -688,4 +689,6 @@ namespace bbst
         return a < b ? b - a : a - b;
     }
 }
+
+
 #endif //BBST_TREE_UTILS_H

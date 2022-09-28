@@ -153,7 +153,18 @@ namespace bbst
 
         static size_t order_of_key(const rb_tree_t &tree, const key_t &key)
         {
-            ASSERT(false, "unimplemented");
+            size_t less_than = 0;
+            rb_tree_node_ptr_t ptr = tree.end_node_.left;
+            auto& comparator = tree.comp_;
+            while(ptr!= nullptr){
+                if(comparator(ptr->key(),key)){
+                    less_than += metadata_updator_t::get_order_metadata(ptr->left)+1;
+                    ptr=ptr->right;
+                } else {
+                    ptr = ptr->left;
+                }
+            }
+            return less_than;
         }
     };
 }

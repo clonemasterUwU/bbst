@@ -147,16 +147,13 @@ namespace bbst
 //rb_tree_header
 namespace bbst
 {
-
     //header is non-owning type, mainly used as a bookkeeping struct for join-split operator
     template<class key_t, class mapped_t, class metadata_t>
     struct rb_tree_header
     {
     private:
-        typedef rb_tree_node<bbst::exposure<key_t, mapped_t, metadata_t>> rb_tree_node_t;
-        typedef rb_tree_node_t *rb_tree_node_ptr_t;
-        typedef base_tree_node<rb_tree_node_t> base_tree_node_t;
-        typedef rb_tree_header<key_t, mapped_t, metadata_t> rb_tree_header_t;
+        using rb_tree_node_t = rb_tree_node<bbst::exposure<key_t, mapped_t, metadata_t>>;
+        using rb_tree_node_ptr_t = rb_tree_node_t *;
 
     public:
         rb_tree_node_ptr_t root_;
@@ -615,13 +612,6 @@ namespace bbst
         inline std::pair<iterator, bool> try_emplace(key_t key, Args...args)
         {
             return emplace_key_args(std::forward<key_t>(key), std::forward<Args>(args)...);
-        }
-
-        template<class key_forward_t>
-        requires std::is_same_v<key_t, std::remove_reference_t<key_forward_t>>
-        mapped_t &operator[](key_forward_t &&key)
-        {
-            return emplace_key_args(std::forward<key_forward_t>(key)).first->mapped;
         }
 
         //TODO:

@@ -12,6 +12,13 @@ namespace bbst
                 ;
     };
 
+    struct noop_metadata_updator_impl
+    {
+        template<class impl_tree_node_ptr_t>
+        void operator()(impl_tree_node_ptr_t ptr) const
+        {}
+    };
+
     struct order_statistic_metadata_updator_impl
     {
         template<class impl_tree_node_ptr_t>
